@@ -536,6 +536,7 @@ elif menu == "Analisis":
                 preds_col = "avg_majority"
                 preds_arr = df[["pred_nb","pred_lgbm","pred_gru"]].mean(axis=1).round().astype(int).values
 
+            hide_oov = st.session_state.get("hide_oov", True)
             pos_top, neg_top = top_tokens_for_preds(df["text"], preds_arr, topn=10, hide_oov=hide_oov)
 
             c1, c2 = st.columns(2)
