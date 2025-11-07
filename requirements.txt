@@ -1,0 +1,12 @@
+﻿streamlit==1.38.0
+pandas
+numpy
+scikit-learn
+lightgbm
+tensorflow-cpu
+keras
+h5py
+joblib
+protobuf
+requests
+matplotlib
