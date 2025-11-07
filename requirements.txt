@@ -10,3 +10,4 @@ joblib
 protobuf
 requests
 matplotlib
+plotly

@@ -493,6 +493,7 @@ elif menu == "Analisis":
             from collections import Counter as _Counter
 
             def top_tokens_for_preds(texts_series, preds_array, topn=10, hide_oov=True):
+                preds_np = np.asarray(preds_array)
                 pos_texts = texts_series[preds_array == 1].astype(str).tolist()
                 neg_texts = texts_series[preds_array == 0].astype(str).tolist()
 
@@ -522,37 +523,109 @@ elif menu == "Analisis":
                 neg_top = neg_ct.most_common(topn)
                 return pos_top, neg_top
 
-            # pilih preds sesuai method (fallback majority jika "Semua")
-            if method == "Naive Bayes":
-                preds_col = "pred_nb"
-                preds_arr = df[preds_col].astype(int).values
-            elif method == "LightGBM":
-                preds_col = "pred_lgbm"
-                preds_arr = df[preds_col].astype(int).values
-            elif method == "GRU":
-                preds_col = "pred_gru"
-                preds_arr = df[preds_col].astype(int).values
-            else:
-                preds_col = "avg_majority"
-                preds_arr = df[["pred_nb","pred_lgbm","pred_gru"]].mean(axis=1).round().astype(int).values
+            # ====== pilih preds sesuai method dan buat top-token + plot (Plotly) ======
+            import plotly.express as px
+            if "hide_oov" not in locals() and "hide_oov" not in globals(): 
+                hide_oov = True
 
-            hide_oov = st.session_state.get("hide_oov", True)
-            pos_top, neg_top = top_tokens_for_preds(df["text"], preds_arr, topn=10, hide_oov=hide_oov)
+            try:    
+                # tentukan preds_series sesuai pilihan user
+                if method == "Naive Bayes":
+                    preds_series = df["pred_nb"].astype(int)
+                elif method == "LightGBM":
+                    preds_series = df["pred_lgbm"].astype(int)
+                elif method == "GRU":
+                    preds_series = df["pred_gru"].astype(int)
+                else:
+                    # "Semua" -> majority/average vote round; fallback safe if kolom tidak ada
+                    if {"pred_nb","pred_lgbm","pred_gru"}.issubset(df.columns):
+                        preds_series = df[["pred_nb","pred_lgbm","pred_gru"]].mean(axis=1).round().astype(int)
+                    else:
+                        if "pred_nb" in df.columns:
+                            preds_series = df["pred_nb"].astype(int)
+                        elif "pred_lgbm" in df.columns:
+                            preds_series = df["pred_lgbm"].astype(int)
+                        elif "pred_gru" in df.columns:
+                            preds_series = df["pred_gru"].astype(int)
+                        else:
+                            preds_series = pd.Series([0]*len(df), index=df.index)    
+            except Exception as e:
+                st.error("Gagal menentukan kolom prediksi: " + str(e))
+                preds_series = pd.Series([0]*len(df), index=df.index)
+
+            # helper sudah tersedia: top_tokens_for_preds
+            pos_top, neg_top = top_tokens_for_preds(df["text"], preds_series.values, topn=10, hide_oov=hide_oov)
+
+            # convert to DataFrames untuk visualisasi
+            def to_vis_df(list_of_tuples):
+                if not list_of_tuples:
+                    return pd.DataFrame({"token":[], "count":[]})
+                return pd.DataFrame(list_of_tuples, columns=["token","count"])
+
+            neg_df_vis = to_vis_df(neg_top)
+            pos_df_vis = to_vis_df(pos_top)
+
+            px = None
+            try:
+                import plotly.express as px
+            except Exception:
+                px = None
+
+            # plotly bar (theme gelap)
+            def plotly_bar(df_vis, title):
+                if df_vis.empty:
+                    return None
+                df_vis = df_vis.sort_values("count", ascending=True)
+                if px is None:
+                    return None
+                fig = px.bar(df_vis, x="count", y="token", orientation="h", text="count")
+                fig.update_traces(textposition="outside")
+                fig.update_layout(template="plotly_dark", title=title, height=360)
+                return fig
+            
+            def fallback_bar(df_vis, title):
+                """Fallback simple bar (pandas/streamlit) - vertical orientation."""
+                if df_vis.empty:
+                    return None
+                # for a reasonable vertical chart use token as index
+                try:
+                    tdf = df_vis.set_index("token")
+                    # streamlit will auto-render as altair/vega-lite under the hood
+                    return tdf
+                except Exception:
+                    return None
 
             c1, c2 = st.columns(2)
             with c1:
-                if len(neg_top) > 0:
-                    neg_df_vis = pd.DataFrame(neg_top, columns=["token","count"]).set_index("token")
-                    st.bar_chart(neg_df_vis)
+                st.subheader("Negatif")
+                fig_neg = plotly_bar(neg_df_vis, "Token Negatif")
+                if fig_neg is None:
+                    try:
+                        st.plotly_chart(fig_neg, use_container_width=True)
+                    except Exception as e:
+                        st.warning("Gagal render Plotly (Negatif): " + str(e))
+                        fallback = fallback_bar(neg_df_vis, "Token Negatif")
+                        if fallback is not None:
+                            st.bar_chart(fallback)
                 else:
-                    st.write("Tidak ada token Negatif.")
-            with c2:
-                if len(pos_top) > 0:
-                    pos_df_vis = pd.DataFrame(pos_top, columns=["token","count"]).set_index("token")
-                    st.bar_chart(pos_df_vis)
-                else:
-                    st.write("Tidak ada token Positif.")
+                    fallback = fallback_bar(neg_df_vis, "Token Negatif")
+                    if fallback is not None:
+                        st.bar_chart(fallback)
+                    else:
+                        st.write("Tidak ada token Negatif.")   
 
+            with c2:
+                st.subheader("Positif")
+                fig_pos = plotly_bar(pos_df_vis, "Token Positif")
+                if fig_pos:
+                    try:
+                        st.plotly_chart(fig_pos, use_container_width=True)
+                    except Exception as e:
+                        st.warning("Gagal render Plotly (Positif): " + str(e))
+                        fallback = fallback_bar(pos_df_vis, "Token Positif")
+                        if fallback is not None:
+                            st.bar_chart(fallback)
+                            
             st.write("---")
 
             # -----------------------------
@@ -625,7 +698,7 @@ elif menu == "Tentang":
     col1, col2 = st.columns([2, 4])
 
     with col1:
-        st.image("assets/foto.jpg", width=280)
+        st.image("assets/foto.jpg", width=220)
 
     with col2:
         st.markdown("""
@@ -640,19 +713,6 @@ elif menu == "Tentang":
 
         **Dosen Pembimbing:**  
         Tony, S.Kom., M.Kom., Ph.D.  
-
-        **Abstrak:**  
-        Ulasan pelanggan pada platform e-commerce seperti Tokopedia merupakan data krusial untuk wawasan bisnis, 
-        namun volumenya yang besar menuntut adanya analisis sentimen otomatis. Perancangan ini bertujuan untuk 
-        membangun sebuah prototipe sistem aplikasi web yang mampu melakukan klasifikasi sentimen pada ulasan 
-        aplikasi Tokopedia secara otomatis. Sistem ini dirancang untuk mengimplementasikan dan membandingkan 
-        kinerja dari tiga model yang mewakili paradigma machine learning berbeda yaitu metode probabilistik 
-        Naïve Bayes, ensemble learning LightGBM, dan deep learning sekuensial Gated Recurrent Unit (GRU). 
-        Data ulasan publik dikumpulkan dari Google Play Store melalui teknik web scraping dan melewati tahap 
-        pra-pemrosesan teks sebelum diimplementasikan pada ketiga model. Kinerja setiap model dievaluasi menggunakan 
-        akakurasi, presisi, recall, F1-score, serta efisiensi komputasi berupa waktu pelatihan dan inferensi.
-        Hasil dari perancangan ini adalah prototipe fungsional yang menyajikan perbandingan antar model untuk menentukan
-        metode yang paling optimal pada klasifikasi ulasan berbahasa Indonesia.
         """)
 
     # Penutup / footer kecil
