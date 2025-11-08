@@ -1,3 +1,4 @@
+# Memanggil Library
 import re
 import unicodedata
 from pathlib import Path
@@ -11,6 +12,10 @@ from tensorflow.keras.preprocessing.sequence import pad_sequences
 from tensorflow.keras.preprocessing.text import tokenizer_from_json
 from pathlib import Path
 from collections import Counter
+from sklearn.feature_extraction.text import CountVectorizer
+from collections import Counter as _Counter
+
+# -------------------------------------------------------------------------------------------------------------
 
 def load_sample_csv():
     """Mengambil contoh dataset CSV untuk di-download oleh user."""
@@ -21,14 +26,14 @@ def load_sample_csv():
     with open(sample_path, "rb") as f:
         return f.read()
 
-# ========== CONFIG STREAMLIT ==========
+# --- CONFIG STREAMLIT ---
 st.set_page_config(
     page_title="Sistem Klasifikasi Ulasan",
     page_icon="📊",
     layout="wide"
 )
 
-# Custom CSS untuk UI sesuai revisi
+# CSS untuk tampilan
 st.markdown(
     """
     <style>
@@ -64,7 +69,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# ========== CLEANING TEXT FUNCTION ==========
+# Pra-pemrosesan kata
 def clean_text_ml(s: str) -> str:
     """Cleaning untuk NB & LightGBM"""
     s = unicodedata.normalize("NFKC", str(s)).lower()
@@ -75,7 +80,7 @@ def clean_text_ml(s: str) -> str:
     return s
 
 def clean_light(s: str) -> str:
-    """Cleaning GRU (lebih ringan)"""
+    """Cleaning GRU (yang ringan)"""
     s = unicodedata.normalize("NFKC", str(s)).lower()
     s = re.sub(r"(https?://\S+|www\.\S+)", " ", s)
     s = re.sub(r"[^a-z\s]", " ", s)
@@ -83,7 +88,7 @@ def clean_light(s: str) -> str:
     return s
 
 
-# ========== LOAD ARTIFACT MODEL ==========
+# LOAD ARTIFACT MODEL
 @st.cache_resource(show_spinner=True)
 def load_artifacts():
     mdir = Path("models")
@@ -107,7 +112,7 @@ def load_artifacts():
     return tfidf, svd, nb, lgbm, tok, MAXLEN, BEST_THR, sig
 
 
-# ========== PREDIKSI MODEL ==========
+# PREDIKSI MODEL
 def predict_nb_lgbm(text, tfidf, svd, nb, lgbm):
     clean = clean_text_ml(text)
     X = tfidf.transform([clean])
@@ -116,36 +121,21 @@ def predict_nb_lgbm(text, tfidf, svd, nb, lgbm):
            (int(lgbm.predict(X_svd)[0]), lgbm.predict_proba(X_svd)[0][1])
 
 def predict_gru(text, tok, MAXLEN, BEST_THR, gru_sig):
-    """
-    Robust caller for GRU SavedModel signature.
-    Tries:
-      1) call with int32 tensor
-      2) call with float32 tensor
-      3) call by wrapping into dictionary argument (if signature expects named input)
-    Returns: (label:int, proba:float)
-    """
     clean = clean_light(text)
     seq = tok.texts_to_sequences([clean])
     pad = pad_sequences(seq, maxlen=MAXLEN, padding="post", truncating="post")
 
-    # convert to numpy array explicitly
-    import numpy as _np
-    pad_np = _np.asarray(pad)
+    pad_np = np.asarray(pad)
 
-    # helper to extract float probability from signature output
     def _extract_proba(output):
-        # output may be a dict of tensors or a single tensor
         if isinstance(output, dict):
             val = list(output.values())[0]
         else:
             val = output
-        # ensure it's a numpy scalar/array and return float
         try:
             arr = _np.asarray(val)
-            # flatten and take first element
             return float(arr.reshape(-1)[0])
         except Exception:
-            # fallback: try tensorflow conversion
             import tensorflow as _tf
             return float(_tf.reshape(val, [-1])[0].numpy())
 
@@ -158,7 +148,6 @@ def predict_gru(text, tok, MAXLEN, BEST_THR, gru_sig):
         label = 1 if proba >= BEST_THR else 0
         return label, proba
     except Exception as e_int:
-        # 2) try float32 positional
         try:
             inp = _tf.convert_to_tensor(pad_np, dtype=_tf.float32)
             out = gru_sig(inp)
@@ -166,13 +155,10 @@ def predict_gru(text, tok, MAXLEN, BEST_THR, gru_sig):
             label = 1 if proba >= BEST_THR else 0
             return label, proba
         except Exception as e_float:
-            # 3) try calling with named argument(s) from signature
             try:
                 sig_inputs = gru_sig.structured_input_signature
-                # structured_input_signature example: ((), {'input_1': TensorSpec(shape=(None, MAXLEN), dtype=tf.int32, name='input_1')})
                 if isinstance(sig_inputs, tuple) and len(sig_inputs) >= 2 and isinstance(sig_inputs[1], dict):
                     name = list(sig_inputs[1].keys())[0]
-                    # try int32 first
                     try:
                         out = gru_sig(**{name: _tf.convert_to_tensor(pad_np, dtype=_tf.int32)})
                         proba = _extract_proba(out)
@@ -183,16 +169,14 @@ def predict_gru(text, tok, MAXLEN, BEST_THR, gru_sig):
                         proba = _extract_proba(out)
                         label = 1 if proba >= BEST_THR else 0
                         return label, proba
-                # if signature format unknown, re-raise
                 raise RuntimeError("Cannot determine signature input names/types")
             except Exception as e_named:
-                # If all attempts failed, raise a clear error including previous exceptions
                 raise RuntimeError(
                     f"GRU inference failed. Tried int32 positional (err: {e_int}), "
                     f"float32 positional (err: {e_float}), and named-arg attempt (err: {e_named})."
                 )
 
-# ========== KOMPONEN OUTPUT BAR ==========
+# KOMPONEN OUTPUT BAR
 def render_row(model_name, proba, label):
     col1, col2, col3 = st.columns([2, 6, 2])
     with col1:
@@ -217,17 +201,14 @@ except Exception as e:
     ARTIFACTS_OK = False
     LOAD_ERROR = str(e)
 
-# =========================================================
 # Sidebar
-# =========================================================
 menu = st.sidebar.radio(
-    label="",
+    label="Pilih Halaman",
     options=["Beranda", "Analisis", "Tentang"],
     index=0,
     label_visibility="collapsed"
 )
 
-# ✅ Tambahkan START di sini (SETELAH radio navigation)
 st.sidebar.markdown("### Contoh File Dataset ")
 sample_bytes = load_sample_csv()
 if sample_bytes:
@@ -240,11 +221,9 @@ if sample_bytes:
     )
 else:
     st.sidebar.error("❌ File contoh dataset tidak ditemukan.")
-st.sidebar.caption("File ini dapat diunduh dan digunakan langsung pada halaman 'Analisis' untuk demo.")
+st.sidebar.caption("File ini dapat diunduh dan digunakan langsung pada halaman 'Analisis' untuk percobaan.")
 
-# =========================================================
 # Halaman Beranda 
-# =========================================================
 if menu == "Beranda":
     st.markdown(
         "<h1 style='font-weight:700; text-align:center;'>Sistem Klasifikasi Ulasan</h1>",
@@ -267,18 +246,19 @@ if menu == "Beranda":
     st.markdown(
         """
         <p style='font-size:17px; padding-bottom: 10px;'>
-        Panduan ini berisi instruksi lengkap untuk membantu Anda memanfaatkan semua fitur program secara maksimal
+        Panduan ini berisi instruksi lengkap untuk membantu Anda memanfaatkan semua fitur aplikasi secara maksimal
         </p>
         """,
         unsafe_allow_html=True,
     )
-    pdf_path = Path("assets/Manual_Book.pdf")
+    pdf_path = Path("assets/Buku_Panduan.pdf")
     if pdf_path.exists():
         with open(pdf_path, "rb") as f:
+            pdf_bytes = f.read()
             st.download_button(
                 label="📄 Unduh Buku Panduan (PDF)",
-                data=f,
-                file_name="Manual_Book.pdf",
+                data=pdf_bytes,
+                file_name="Buku Panduan.pdf",
                 mime="application/pdf",
                 use_container_width=True,
             )
@@ -286,8 +266,7 @@ if menu == "Beranda":
         st.warning("File manual belum ditemukan pada folder assets/Manual_Book.pdf.")
 
     st.write("---")
-
-    # Input DEMO untuk Beranda (PASTIKAN INI ADA DI SINI, BUKAN DI LUAR)
+    # Harus disini
     st.markdown("#### Silahkan coba untuk memasukkan sebuah ulasan:")
 
     text_demo = st.text_area(
@@ -296,10 +275,9 @@ if menu == "Beranda":
         height=140,
     )
 
-    # Tambahkan JARAK sebelum tombol Analisis
     st.markdown("<div style='height:15px;'></div>", unsafe_allow_html=True)
 
-    if st.button("Klasifikasi"):
+    if st.button("Analisis"):
         if text_demo.strip() == "":
             st.warning("Masukkan teks terlebih dahulu.")
         else:
@@ -314,14 +292,23 @@ if menu == "Beranda":
             render_row("LightGBM", lgb_proba, lgb_label)
             render_row("GRU", gru_proba, gru_label)
 
-# =========================================================
-# PAGE: ANALISIS 
-# =========================================================
+# Halaman Analisis 
 elif menu == "Analisis":
     st.markdown(
         "<h2 style='font-weight:700; text-align:center;'>Klasifikasi Ulasan dengan File</h2>",
         unsafe_allow_html=True,
     )
+
+    st.markdown(
+        """
+        <p style='text-align:center; font-size:17px; padding-bottom: 10px;'>
+        Pada halaman ini, Anda dapat menguji performa model pada dataset Anda sendiri. 
+        Silakan unggah file ulasan Anda (dalam format .csv atau .xlsx), lalu pilih metode klasifikasi dari dropdown untuk menampilkan hasil analisis
+        </p>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.write("---")
 
     # teks intro
     st.markdown(
@@ -345,32 +332,31 @@ elif menu == "Analisis":
 
             **Ketentuan:**
             1. Penamaan kolom harus sama persis (perhatikan huruf besar/kecil).
-            2. Untuk performa terbaik, disarankan mengunggah data di bawah 1.000 baris. 
+            2. Untuk performa terbaik, disarankan mengunggah data di bawah 10.000 baris. 
             (Ini agar proses analisisnya cepat dan tidak time out).
             """
         )
 
     # ---- Upload file (CSV / XLSX) ----
-    uploaded = st.file_uploader("**Unggah file CSV**", type=["csv","xlsx"])
+    uploaded_file = st.file_uploader("**Unggah file CSV**", type=["csv","xlsx"])
     st.caption("Jika ingin mencoba, bisa menggunakan dataset yang tersedia.")
 
-    # Pilihan metode visualisasi / fokus
+    # Pilihan metode visualisasi 
     method = st.selectbox("Pilih Metode (untuk visual/top-token)", ["Semua", "Naive Bayes", "LightGBM", "GRU"])
 
-    if uploaded is None:
-        st.info("Silakan unggah file untuk memulai analisis.")
-    else:
-        # baca file & normalisasi kolom (tolerant)
+    if uploaded_file is not None:
         try:
-            if str(uploaded.name).lower().endswith(".xlsx"):
-                df = pd.read_excel(uploaded)
-            else:
-                df = pd.read_csv(uploaded)
+            if uploaded_file.name.lower().endswith(".csv"):
+                df = pd.read_csv(uploaded_file)
+            elif uploaded_file.name.lower().endswith(".xlsx"):
+                # pakai engine explicit (but engine must be installed in env)
+                df = pd.read_excel(uploaded_file, engine="openpyxl")
+            st.dataframe(df.head())
         except Exception as e:
-            st.error("Gagal membaca file: " + str(e))
+            st.error(f"Gagal membaca file: {e}")
             st.stop()
 
-        # tampilkan kolom (help)
+        # tampilkan kolom 
         cols_list = list(df.columns)
         st.caption("Kolom pada file: " + ", ".join(cols_list))
 
@@ -401,12 +387,12 @@ elif menu == "Analisis":
         if score_col is not None:
             df["score"] = df[score_col]
 
-        st.success(f"File dimuat — {len(df)} baris (kolom teks: '{text_col}'{', kolom score: '+score_col if score_col else ''})")
+        st.success(f"File dimuat — {len(df)} baris")
         if len(df) > 20000:
             st.warning("File sangat besar (>20k baris). Proses dapat memakan waktu lama.")
 
         # tombol analisis
-        if st.button("Analisis"):
+        if st.button("Klasifikasi"):
             if not ARTIFACTS_OK:
                 st.error("Model/artifact tidak tersedia. Error saat memuat: " + LOAD_ERROR)
                 st.stop()
@@ -446,16 +432,11 @@ elif menu == "Analisis":
 
             st.success("Analisis selesai — scroll ke bawah untuk melihat visualisasi dan tabel.")
 
-            # -----------------------------
-            # VISUALISASI: PIE CHART SENTIMEN
-            # -----------------------------
-            import matplotlib.pyplot as plt
-            from collections import Counter
-
+            # Visualisasi Pie Chart (default Matplotlib)
             st.subheader("Distribusi Sentimen Prediksi")
 
-            def plot_pie_from_preds(preds, title):
-                cnt = Counter(preds.astype(int))
+            def plot_pie_from_preds(preds, title=None, figsize=(4, 3), colors=None):
+                cnt = Counter(int(x) for x in preds.astype(int)) if hasattr(preds, "astype") else Counter(int(x) for x in preds)
                 labels = []
                 sizes = []
                 if cnt.get(1, 0) > 0:
@@ -464,13 +445,44 @@ elif menu == "Analisis":
                 if cnt.get(0, 0) > 0:
                     labels.append("Negatif (0)")
                     sizes.append(cnt.get(0, 0))
-                fig, ax = plt.subplots(figsize=(4,3))
+
+                if colors is None:
+                    colors = ["#1f77b4", "#ff7f0e"]
+
+                fig, ax = plt.subplots(figsize=figsize, facecolor="black")
+                fig.patch.set_facecolor("black")
+                ax.set_facecolor("black")
+
                 if len(sizes) == 0:
-                    ax.text(0.5, 0.5, "Tidak ada data", ha="center")
+                    ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center", color="white", fontsize=12)
+                    ax.set_xticks([])
+                    ax.set_yticks([])
                 else:
-                    ax.pie(sizes, labels=labels, autopct="%1.1f%%", startangle=90)
-                    ax.set_title(title)
-                st.pyplot(fig)
+                    use_colors = colors[: len(sizes)]
+                    
+                    wedges, texts, autotexts = ax.pie(
+                        sizes,
+                        labels=labels,
+                        autopct="%1.1f%%",
+                        startangle=90,
+                        colors=use_colors,
+                        textprops={"color": "white", "fontsize": 11}
+                    )           
+
+                    for t in autotexts:
+                        t.set_color("white")
+                        t.set_fontsize(11)
+
+                    for w in wedges:
+                        w.set_edgecolor("black")
+                        w.set_linewidth(0.5)
+                    ax.axis("equal") 
+
+                    if title:
+                        ax.set_title(title, color="white", pad=8, fontsize=14)
+
+                    st.pyplot(fig)
+                    plt.close(fig)
 
             # tentukan preds berdasarkan pilihan metode
             if method == "Naive Bayes":
@@ -484,13 +496,13 @@ elif menu == "Analisis":
                 avg_pred = df[["pred_nb","pred_lgbm","pred_gru"]].mean(axis=1).round().astype(int)
                 plot_pie_from_preds(avg_pred.values, "Semua Model (majority/avg)")
 
-            # -----------------------------
-            # VISUALISASI: TOP 10 TOKEN
-            # -----------------------------
-            st.subheader("Top 10 Kata Teratas (Negatif | Positif)")
+            st.write("---")
 
-            from sklearn.feature_extraction.text import CountVectorizer
-            from collections import Counter as _Counter
+            # Visualisasi Top 10 Kata
+            st.markdown(
+                "<p style='text-align: center; font-size: 26px; font-weight: 700;'>Top 10 Kata Teratas</p>",
+                unsafe_allow_html=True
+            )
 
             def top_tokens_for_preds(texts_series, preds_array, topn=10, hide_oov=True):
                 preds_np = np.asarray(preds_array)
@@ -523,7 +535,7 @@ elif menu == "Analisis":
                 neg_top = neg_ct.most_common(topn)
                 return pos_top, neg_top
 
-            # ====== pilih preds sesuai method dan buat top-token + plot (Plotly) ======
+            # pilih preds sesuai method dan buat top-token + plot (Plotly) 
             import plotly.express as px
             if "hide_oov" not in locals() and "hide_oov" not in globals(): 
                 hide_oov = True
@@ -553,7 +565,6 @@ elif menu == "Analisis":
                 st.error("Gagal menentukan kolom prediksi: " + str(e))
                 preds_series = pd.Series([0]*len(df), index=df.index)
 
-            # helper sudah tersedia: top_tokens_for_preds
             pos_top, neg_top = top_tokens_for_preds(df["text"], preds_series.values, topn=10, hide_oov=hide_oov)
 
             # convert to DataFrames untuk visualisasi
@@ -572,66 +583,92 @@ elif menu == "Analisis":
                 px = None
 
             # plotly bar (theme gelap)
-            def plotly_bar(df_vis, title):
+            def plotly_bar(df_vis, title=None, orientation="h"):
                 if df_vis.empty:
                     return None
-                df_vis = df_vis.sort_values("count", ascending=True)
-                if px is None:
-                    return None
-                fig = px.bar(df_vis, x="count", y="token", orientation="h", text="count")
+                df_vis = df_vis.copy()
+                df_vis["count"] = pd.to_numeric(df_vis["count"], errors="coerce").fillna(0).astype(int)
+                ordered_tokens = df_vis.sort_values("count", ascending=False)["token"].tolist()
+
+                if orientation == "h":
+                    fig = px.bar(
+                        df_vis,
+                        x="count",
+                        y="token",
+                        orientation="h",
+                        text="count",
+                        category_orders={"token": ordered_tokens}
+                     )
+                    fig.update_layout(yaxis=dict(categoryorder="array", categoryarray=ordered_tokens))
+                else: 
+                    fig = px.bar(
+                        df_vis,
+                        x="token",
+                        y="count",
+                        text="count",
+                        category_orders={"token": ordered_tokens}
+                    )  
+                    fig.update_layout(xaxis=dict(categoryorder="array", categoryarray=ordered_tokens))
+                fig.update_layout(xaxis_title=None, yaxis_title=None)
+
+                if title:
+                    fig.update_layout(title_text=title)
+
                 fig.update_traces(textposition="outside")
-                fig.update_layout(template="plotly_dark", title=title, height=360)
+                fig.update_layout(template="plotly_dark", height=360, margin=dict(l=40, r=20, t=10, b=40), showlegend=False)
                 return fig
             
-            def fallback_bar(df_vis, title):
+            def fallback_bar(df_vis):
                 """Fallback simple bar (pandas/streamlit) - vertical orientation."""
                 if df_vis.empty:
                     return None
-                # for a reasonable vertical chart use token as index
                 try:
                     tdf = df_vis.set_index("token")
-                    # streamlit will auto-render as altair/vega-lite under the hood
                     return tdf
                 except Exception:
                     return None
 
             c1, c2 = st.columns(2)
             with c1:
-                st.subheader("Negatif")
-                fig_neg = plotly_bar(neg_df_vis, "Token Negatif")
-                if fig_neg is None:
+                st.markdown("<p style='font-size: 18px; font-weight: 500; text-align:center;'>Negatif</p>", unsafe_allow_html=True)
+                fig_neg = plotly_bar(neg_df_vis, None, orientation="h")
+                if fig_neg is not None:
                     try:
                         st.plotly_chart(fig_neg, use_container_width=True)
                     except Exception as e:
                         st.warning("Gagal render Plotly (Negatif): " + str(e))
-                        fallback = fallback_bar(neg_df_vis, "Token Negatif")
+                        fallback = fallback_bar(neg_df_vis)
                         if fallback is not None:
                             st.bar_chart(fallback)
                 else:
-                    fallback = fallback_bar(neg_df_vis, "Token Negatif")
+                    fallback = fallback_bar(neg_df_vis)
                     if fallback is not None:
                         st.bar_chart(fallback)
                     else:
                         st.write("Tidak ada token Negatif.")   
 
             with c2:
-                st.subheader("Positif")
-                fig_pos = plotly_bar(pos_df_vis, "Token Positif")
-                if fig_pos:
+                st.markdown("<p style='font-size: 18px; font-weight: 500; text-align:center;'>Positif</p>", unsafe_allow_html=True)
+                fig_pos = plotly_bar(pos_df_vis, None, orientation="h")
+                if fig_pos is not None:
                     try:
                         st.plotly_chart(fig_pos, use_container_width=True)
                     except Exception as e:
                         st.warning("Gagal render Plotly (Positif): " + str(e))
-                        fallback = fallback_bar(pos_df_vis, "Token Positif")
+                        fallback = fallback_bar(pos_df_vis)
                         if fallback is not None:
                             st.bar_chart(fallback)
+                else:
+                    fallback = fallback_bar(pos_df_vis)
+                    if fallback is not None:
+                        st.bar_chart(fallback)
+                    else:
+                        st.write("Tidak ada token Positif.")
                             
             st.write("---")
 
-            # -----------------------------
-            # TABEL EVALUASI: pakai hasil pelatihan (jika tersedia), sederhana
-            # -----------------------------
-            st.subheader("Tabel Perbandingan (hasil pelatihan / eksperimen)")
+            # Tabel Perbandingan Kinerja
+            st.subheader("Tabel Perbandingan Evaluasi")
 
             exp_path = Path("models/experiments.json")
             fallback = [
@@ -670,10 +707,7 @@ elif menu == "Analisis":
 
             st.dataframe(pd.DataFrame(rows), use_container_width=True)
 
-
-            # -----------------------------
-            # TABEL EFFICIENCY (estimasi) + DOWNLOAD
-            # -----------------------------
+            # Tabel Efisiensi Komputasi
             st.subheader("Tabel Efisiensi Komputasi")
             eff_df = pd.DataFrame([
                 {"Model":"GRU", "Waktu Training (s)": 876.44, "Waktu Inferensi (ms)": 13.59},
@@ -682,23 +716,33 @@ elif menu == "Analisis":
             ])
             st.dataframe(eff_df, use_container_width=True)
 
-            # download hasil (UTF-8 BOM agar Excel kebaca)
+            # download hasil 
             csv_bytes = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
             st.download_button("⬇️ Unduh Hasil Analisis (CSV)", csv_bytes, file_name="hasil_analisis.csv", mime="text/csv")
 
-# =========================================================
-# PAGE 3 — TENTANG
-# =========================================================
+# Halaman Tentang
 elif menu == "Tentang":
     st.markdown(
-        "<h2 style='font-weight:700; text-align:center;'>Tentang Perancang</h2>",
+        "<h2 style='font-weight:700; text-align:center;'>Tentang</h2>",
         unsafe_allow_html=True,
     )
+
+    st.markdown("""
+        Aplikasi ini dirancang untuk memberikan implementasi nyata dari perbandingan tiga metode klasifikasi sentimen. 
+        Harapan saya, sistem ini tidak hanya memenuhi syarat Tugas Akhir, tetapi juga dapat menjadi alat bantu 
+        yang bermanfaat bagi siapa saja yang tertarik pada analisis data ulasan dan Natural Language Processing.
+    """)
+
     st.write("---")
+    st.markdown(
+        "<h3 style='font-weight:700; text-align:center;'>Profil Perancang</h3>",
+        unsafe_allow_html=True,
+    )
+
     col1, col2 = st.columns([2, 4])
 
     with col1:
-        st.image("assets/foto.jpg", width=220)
+        st.image("assets/foto.jpg", width=260)
 
     with col2:
         st.markdown("""

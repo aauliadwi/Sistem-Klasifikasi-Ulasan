@@ -11,3 +11,4 @@ protobuf
 requests
 matplotlib
 plotly
+openpyxl
