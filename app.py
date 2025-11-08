@@ -710,9 +710,9 @@ elif menu == "Analisis":
             # Tabel Efisiensi Komputasi
             st.subheader("Tabel Efisiensi Komputasi")
             eff_df = pd.DataFrame([
-                {"Model":"GRU", "Waktu Training (s)": 876.44, "Waktu Inferensi (ms)": 13.59},
-                {"Model":"Naive Bayes", "Waktu Training (s)": 0.010, "Waktu Inferensi (ms)": 0.001},
-                {"Model":"LightGBM", "Waktu Training (s)": 39.91, "Waktu Inferensi (ms)": 0.095}
+                {"Model":"GRU", "Waktu Training (s)": 876.44, "Waktu Inferensi (s)": 13.59},
+                {"Model":"Naive Bayes", "Waktu Training (s)": 0.010, "Waktu Inferensi (s)": 0.001},
+                {"Model":"LightGBM", "Waktu Training (s)": 39.91, "Waktu Inferensi (s)": 0.095}
             ])
             st.dataframe(eff_df, use_container_width=True)
 
