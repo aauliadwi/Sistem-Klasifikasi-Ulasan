@@ -672,7 +672,7 @@ elif menu == "Analisis":
 
             exp_path = Path("models/experiments.json")
             fallback = [
-                {"Model": "GRU", "Accuracy": 0.8725, "Precision": 0.8382, "Recall": 0.7267, "F1-Score": 0.7785},
+                {"Model": "GRU", "Accuracy": 0.8651, "Precision": 0.7918, "Recall": 0.7630, "F1-Score": 0.7772},
                 {"Model": "Naive Bayes", "Accuracy": 0.8632, "Precision": 0.8138, "Recall": 0.7213, "F1-Score": 0.7648},
                 {"Model": "LightGBM", "Accuracy": 0.8422, "Precision": 0.7680, "Recall": 0.6992, "F1-Score": 0.7320},
             ]
@@ -710,15 +710,28 @@ elif menu == "Analisis":
             # Tabel Efisiensi Komputasi
             st.subheader("Tabel Efisiensi Komputasi")
             eff_df = pd.DataFrame([
-                {"Model":"GRU", "Waktu Training (s)": 24.54, "Waktu Inferensi (s)": 0.49},
-                {"Model":"Naive Bayes", "Waktu Training (s)": 0.009, "Waktu Inferensi (s)": 0.001},
-                {"Model":"LightGBM", "Waktu Training (s)": 46.65, "Waktu Inferensi (s)": 0.101}
+                {"Model":"GRU", "Waktu Training (s)": 21.70, "Waktu Inferensi (s)": 0.43},
+                {"Model":"Naive Bayes", "Waktu Training (s)": 0.010, "Waktu Inferensi (s)": 0.001},
+                {"Model":"LightGBM", "Waktu Training (s)": 34.88, "Waktu Inferensi (s)": 0.081}
             ])
             st.dataframe(eff_df, use_container_width=True)
 
-            # download hasil 
-            csv_bytes = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-            st.download_button("⬇️ Unduh Hasil Analisis (CSV)", csv_bytes, file_name="hasil_analisis.csv", mime="text/csv")
+            # --- BAGIAN TOMBOL DOWNLOAD ---
+            cols_prob = ['prob_nb', 'prob_lgbm', 'prob_gru']
+            
+            for col in cols_prob:
+                if col in df.columns:
+                    # Paksa jadi float biar aman
+                    df[col] = df[col].astype(float)
+
+            csv_bytes = df.to_csv(index=False, sep=',', float_format='%.4f').encode('utf-8')
+
+            st.download_button(
+                label="⬇️ Unduh Hasil Analisis (CSV)",
+                data=csv_bytes,
+                file_name='hasil_analisis.csv',
+                mime='text/csv',
+            )
 
 # Halaman Tentang
 elif menu == "Tentang":
